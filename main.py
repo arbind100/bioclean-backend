@@ -1,89 +1,68 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import Optional
-from fastapi.middleware.cors import CORSMiddleware
-import os, openai, pinecone, requests
+import os
+import faiss
+import pickle
+from flask import Flask, request, jsonify
+from openai import OpenAIEmbeddings
+from dotenv import load_dotenv
 
-# Load keys from environment
-openai.api_key        = os.getenv("OPENAI_API_KEY")
-pinecone_api_key      = os.getenv("PINECONE_API_KEY")
-pinecone_env          = os.getenv("PINECONE_ENVIRONMENT")
-weather_api_key       = os.getenv("OPENWEATHER_API_KEY")
+load_dotenv()
 
-# Init Pinecone
-pinecone.init(api_key=pinecone_api_key, environment=pinecone_env)
-INDEX_NAME = "bio-clean-ai"
-if INDEX_NAME not in pinecone.list_indexes():
-    pinecone.create_index(INDEX_NAME, dimension=1536)
-index = pinecone.Index(INDEX_NAME)
+app = Flask(__name__)
 
-# FastAPI setup
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Set up FAISS index path
+FAISS_INDEX_PATH = "vector_index.faiss"
+DOCS_PATH = "docs.pkl"
 
-class PollutionInput(BaseModel):
-    pollutionType: str
-    description: str
-    location: str
-    severity: int
-    image: Optional[str] = None
+# Load embedding model
+embedding_model = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
 
-def get_embeddings(text: str):
-    resp = openai.Embedding.create(input=text, model="text-embedding-ada-002")
-    return resp.data[0].embedding
+# Load or create FAISS index
+def load_faiss_index():
+    if os.path.exists(FAISS_INDEX_PATH):
+        index = faiss.read_index(FAISS_INDEX_PATH)
+        with open(DOCS_PATH, "rb") as f:
+            docs = pickle.load(f)
+        return index, docs
+    else:
+        index = faiss.IndexFlatL2(1536)  # 1536 for OpenAI embeddings
+        return index, []
 
-def store_case(case_id: str, description: str):
-    emb = get_embeddings(description)
-    index.upsert([(case_id, emb, {"description": description})])
+faiss_index, stored_texts = load_faiss_index()
 
-def get_similar_cases(text: str, top_k: int = 3):
-    emb = get_embeddings(text)
-    qres = index.query(vector=emb, top_k=top_k, include_metadata=True)
-    return [m.metadata["description"] for m in qres.matches]
+# Save FAISS index and docs
+def save_faiss_index():
+    faiss.write_index(faiss_index, FAISS_INDEX_PATH)
+    with open(DOCS_PATH, "wb") as f:
+        pickle.dump(stored_texts, f)
 
-def get_weather_data(loc: str):
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={loc}&appid={weather_api_key}&units=metric"
-    r = requests.get(url)
-    if r.ok:
-        d = r.json().get("main", {})
-        w = r.json().get("weather", [{}])[0]
-        return {"temp": d.get("temp"), "humidity": d.get("humidity"), "desc": w.get("description")}
-    return {}
+# Route to add data to vector index
+@app.route("/add", methods=["POST"])
+def add_data():
+    data = request.json
+    text = data.get("text")
+    if not text:
+        return jsonify({"error": "Missing 'text' field"}), 400
 
-@app.post("/generate-plan")
-def generate_plan(input: PollutionInput):
-    # 1) Record this case
-    desc = f"{input.pollutionType} at {input.location}: {input.description}, severity {input.severity}"
-    store_case(input.location + "-" + os.urandom(4).hex(), desc)
+    embedding = embedding_model.embed_query(text)
+    faiss_index.add([embedding])
+    stored_texts.append(text)
+    save_faiss_index()
 
-    # 2) Find similar past cases
-    similar = get_similar_cases(desc)
+    return jsonify({"message": "Data added to index."})
 
-    # 3) Get weather
-    weather = get_weather_data(input.location)
+# Route to search
+@app.route("/search", methods=["POST"])
+def search():
+    data = request.json
+    query = data.get("query")
+    if not query:
+        return jsonify({"error": "Missing 'query' field"}), 400
 
-    # 4) Build prompt
-    prompt = (
-        f"You are BioClean.AI...\n\n"
-        f"User reported:\n • Type: {input.pollutionType}\n • Desc: {input.description}\n"
-        f" • Loc: {input.location}\n • Sev: {input.severity}\n\n"
-        f"Weather: {weather}\n\nSimilar cases:\n"
-    )
-    for i, c in enumerate(similar,1):
-        prompt += f" {i}. {c}\n"
-    prompt += "\nGenerate:\n1. Diagnosis\n2. Organisms\n3. Instructions\n4. Monitoring tips\n"
+    query_embedding = embedding_model.embed_query(query)
+    D, I = faiss_index.search([query_embedding], k=3)
 
-    # 5) Ask AI
-    res = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role":"system","content":"You are BioClean.AI, expert in eco-remediation."},
-                  {"role":"user","content":prompt}]
-    )
-    plan = res.choices[0].message.content
-    return {"plan": plan, "similarCases": similar, "weather": weather}
+    results = [stored_texts[i] for i in I[0] if i < len(stored_texts)]
+    return jsonify({"results": results})
+
+if __name__ == "__main__":
+    app.run(debug=True)
