@@ -2,11 +2,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import numpy as np
 import faiss
-import json
+import openai
+import os
 
+# Initialize FastAPI app
 app = FastAPI()
 
-# Sample data
+# Load OpenAI API key from environment
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# Sample data (Replace with real data you want to use)
 texts = [
     "Photosynthesis is the process by which green plants convert sunlight into energy.",
     "The mitochondria is the powerhouse of the cell.",
@@ -15,13 +20,21 @@ texts = [
     "Enzymes are biological catalysts that speed up reactions."
 ]
 
-# Dummy embeddings (in practice, use real embeddings)
-np.random.seed(42)
-dim = 1536
-embeddings = np.random.rand(len(texts), dim).astype('float32')
-
 # Create FAISS index
+dim = 1536  # OpenAI's model uses 1536 dimensions for embeddings
 index = faiss.IndexFlatL2(dim)
+
+# Function to get OpenAI embeddings
+def get_openai_embedding(text: str):
+    response = openai.Embedding.create(
+        model="text-embedding-ada-002",  # Use OpenAI's Ada model for embeddings
+        input=text
+    )
+    embedding = response['data'][0]['embedding']
+    return np.array(embedding, dtype='float32')
+
+# Generate embeddings for the sample texts
+embeddings = np.array([get_openai_embedding(text) for text in texts])
 index.add(embeddings)
 
 @app.post("/query")
@@ -29,11 +42,13 @@ async def query(request: Request):
     body = await request.json()
     query_text = body.get("query", "")
 
-    # Simulate query embedding
-    query_embedding = np.random.rand(1, dim).astype('float32')  # Dummy
+    # Get embedding for the query
+    query_embedding = get_openai_embedding(query_text)
 
-    distances, indices = index.search(query_embedding, k=3)
+    # Perform FAISS search
+    distances, indices = index.search(np.array([query_embedding]), k=3)
 
+    # Get matched texts based on the indices
     matched_texts = [texts[i] for i in indices[0]]
 
     return JSONResponse(content={
@@ -41,4 +56,3 @@ async def query(request: Request):
         "top_matches": matched_texts,
         "distances": distances[0].tolist()
     })
-
