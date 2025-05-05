@@ -1,40 +1,44 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import openai
-import faiss
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import numpy as np
-import os
+import faiss
+import json
 
 app = FastAPI()
 
-# Load environment variables
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Sample data
+texts = [
+    "Photosynthesis is the process by which green plants convert sunlight into energy.",
+    "The mitochondria is the powerhouse of the cell.",
+    "DNA carries genetic information in living organisms.",
+    "Climate change is a result of increased greenhouse gases.",
+    "Enzymes are biological catalysts that speed up reactions."
+]
 
-# Define request model
-class QueryRequest(BaseModel):
-    query: str
+# Dummy embeddings (in practice, use real embeddings)
+np.random.seed(42)
+dim = 1536
+embeddings = np.random.rand(len(texts), dim).astype('float32')
 
-# Dummy FAISS index (for now)
-dimension = 512
-index = faiss.IndexFlatL2(dimension)
-
-# Dummy vectors (random)
-for _ in range(5):
-    vec = np.random.rand(dimension).astype('float32')
-    index.add(np.array([vec]))
-
-@app.get("/")
-def read_root():
-    return {"message": "FastAPI app with FAISS and OpenAI is running."}
+# Create FAISS index
+index = faiss.IndexFlatL2(dim)
+index.add(embeddings)
 
 @app.post("/query")
-def query_vector(request: QueryRequest):
-    # Generate dummy query vector (in real app, use embeddings)
-    query_vec = np.random.rand(dimension).astype('float32')
-    D, I = index.search(np.array([query_vec]), k=3)
-    return {
-        "your_query": request.query,
-        "top_matches_indices": I.tolist(),
-        "distances": D.tolist()
-    }
-    
+async def query(request: Request):
+    body = await request.json()
+    query_text = body.get("query", "")
+
+    # Simulate query embedding
+    query_embedding = np.random.rand(1, dim).astype('float32')  # Dummy
+
+    distances, indices = index.search(query_embedding, k=3)
+
+    matched_texts = [texts[i] for i in indices[0]]
+
+    return JSONResponse(content={
+        "query": query_text,
+        "top_matches": matched_texts,
+        "distances": distances[0].tolist()
+    })
+
