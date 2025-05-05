@@ -1,6 +1,6 @@
-openai==1.0.0
 fastapi
 uvicorn
 faiss-cpu
-pydantic
 numpy
+openai>=1.0.0
+
