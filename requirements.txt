@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-faiss-cpu
-sentence-transformers==2.2.2
-huggingface-hub==0.15.1
 numpy
+faiss-cpu
+transformers
+torch
+sentence-transformers
+
