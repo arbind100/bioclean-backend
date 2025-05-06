@@ -2,16 +2,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import numpy as np
 import faiss
-import os
-from openai import OpenAI  # Updated import
+from sentence_transformers import SentenceTransformer  # Import sentence transformers
 
 # Initialize FastAPI app
 app = FastAPI()
 
-# Load OpenAI API key from environment
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Load the pre-trained model for sentence embeddings
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Sample data
+# Sample data (Replace with real data you want to use)
 texts = [
     "Photosynthesis is the process by which green plants convert sunlight into energy.",
     "The mitochondria is the powerhouse of the cell.",
@@ -21,24 +20,16 @@ texts = [
 ]
 
 # Create FAISS index
-dim = 1536
+dim = 384  # Sentence transformers use a 384-dimensional embedding
 index = faiss.IndexFlatL2(dim)
 
-# Updated OpenAI embedding function
-def get_openai_embedding(text: str):
-    try:
-        response = client.embeddings.create(
-            model="text-embedding-ada-002",
-            input=[text]
-        )
-        embedding = response.data[0].embedding
-        return np.array(embedding, dtype='float32')
-    except Exception as e:
-        print("OpenAI embedding error:", e)
-        return np.zeros(dim, dtype='float32')  # fallback
+# Function to get sentence embedding using SentenceTransformers
+def get_sentence_embedding(text: str):
+    embedding = model.encode(text)  # Generate embedding
+    return np.array(embedding, dtype='float32')
 
-# Generate embeddings
-embeddings = np.array([get_openai_embedding(text) for text in texts])
+# Generate embeddings for the sample texts
+embeddings = np.array([get_sentence_embedding(text) for text in texts])
 index.add(embeddings)
 
 @app.post("/query")
@@ -46,8 +37,13 @@ async def query(request: Request):
     body = await request.json()
     query_text = body.get("query", "")
 
-    query_embedding = get_openai_embedding(query_text)
+    # Get embedding for the query
+    query_embedding = get_sentence_embedding(query_text)
+
+    # Perform FAISS search
     distances, indices = index.search(np.array([query_embedding]), k=3)
+
+    # Get matched texts based on the indices
     matched_texts = [texts[i] for i in indices[0]]
 
     return JSONResponse(content={
