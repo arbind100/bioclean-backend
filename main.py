@@ -2,49 +2,59 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
+import openai
+import os
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Sample texts
-texts = [
-    "Photosynthesis is the process by which green plants convert sunlight into energy.",
-    "The mitochondria is the powerhouse of the cell.",
-    "DNA carries genetic information in living organisms.",
-    "Climate change is a result of increased greenhouse gases.",
-    "Enzymes are biological catalysts that speed up reactions."
-]
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Load the SentenceTransformer model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Load data from data.txt
+with open("data.txt", "r") as f:
+    texts = [line.strip() for line in f if line.strip()]
 
-# Set dimension
-dim = 384
+# Get embeddings using the new OpenAI SDK
+def get_openai_embedding(text: str):
+    try:
+        response = openai.embeddings.create(
+            model="text-embedding-ada-002",
+            input=[text]
+        )
+        return np.array(response.data[0].embedding, dtype=np.float32)
+    except Exception as e:
+        print(f"OpenAI embedding error: {e}")
+        return None
 
 # Create FAISS index
+dim = 1536
 index = faiss.IndexFlatL2(dim)
 
-# Generate embeddings for all texts
-embeddings = np.array([model.encode(text) for text in texts], dtype='float32')
-index.add(embeddings)
+# Generate and add embeddings
+embedding_list = []
+valid_texts = []
+for text in texts:
+    embedding = get_openai_embedding(text)
+    if embedding is not None:
+        embedding_list.append(embedding)
+        valid_texts.append(text)
+
+if embedding_list:
+    index.add(np.array(embedding_list))
 
 @app.post("/query")
 async def query(request: Request):
     body = await request.json()
     query_text = body.get("query", "")
 
-    # Get query embedding
-    query_embedding = np.array([model.encode(query_text)], dtype='float32')
+    query_embedding = get_openai_embedding(query_text)
+    if query_embedding is None or index.ntotal == 0:
+        return JSONResponse(content={"error": "Embedding generation or indexing failed"}, status_code=500)
 
-    # Search FAISS index
-    distances, indices = index.search(query_embedding, k=3)
-
-    # Fetch top matches
-    matched_texts = [texts[i] for i in indices[0]]
+    distances, indices = index.search(np.array([query_embedding]), k=3)
+    matches = [valid_texts[i] for i in indices[0]]
 
     return JSONResponse(content={
         "query": query_text,
-        "top_matches": matched_texts,
+        "top_matches": matches,
         "distances": distances[0].tolist()
     })
