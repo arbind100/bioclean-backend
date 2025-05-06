@@ -1,6 +1,5 @@
+sentence-transformers
+faiss-cpu
 fastapi
 uvicorn
-faiss-cpu
-numpy
-openai>=1.0.0
 
