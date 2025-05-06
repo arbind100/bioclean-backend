@@ -1,5 +1,5 @@
 fastapi
 uvicorn
 faiss-cpu
-sentence-transformers
 numpy
+openai>=1.0.0
