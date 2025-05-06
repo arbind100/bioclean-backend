@@ -7,42 +7,31 @@ from sentence_transformers import SentenceTransformer
 # Initialize FastAPI app
 app = FastAPI()
 
-# Load Hugging Face sentence transformer model
-model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+# Load Hugging Face embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Load sample texts (you can replace these with your own)
-texts = []
+# Load texts from file
 with open("data.txt", "r", encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line:
-            texts.append(line)
+    texts = [line.strip() for line in f if line.strip()]
 
 # Create FAISS index
-dim = 384  # Dimension of MiniLM model embeddings
+dim = 384  # Dimension for 'all-MiniLM-L6-v2'
 index = faiss.IndexFlatL2(dim)
 
-# Function to get Hugging Face embedding
-def get_embedding(text: str):
-    embedding = model.encode(text, convert_to_numpy=True)
-    return embedding.astype('float32')
-
-# Generate embeddings for the sample texts
-embeddings = np.array([get_embedding(text) for text in texts])
-index.add(embeddings)
+# Generate embeddings and add to index
+embeddings = model.encode(texts, convert_to_numpy=True)
+index.add(np.array(embeddings).astype("float32"))
 
 @app.post("/query")
 async def query(request: Request):
     body = await request.json()
     query_text = body.get("query", "")
 
-    # Get embedding for the query
-    query_embedding = get_embedding(query_text)
+    # Get embedding for query
+    query_embedding = model.encode([query_text], convert_to_numpy=True).astype("float32")
 
-    # Perform FAISS search
-    distances, indices = index.search(np.array([query_embedding]), k=3)
-
-    # Get matched texts based on the indices
+    # Search in index
+    distances, indices = index.search(query_embedding, k=3)
     matched_texts = [texts[i] for i in indices[0]]
 
     return JSONResponse(content={
